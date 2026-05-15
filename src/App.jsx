@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 
-const API_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY;
+const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY;
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
 
 const MATCH_TAGS = {
   sound: { label: "Sound", color: "#FF6B6B" },
@@ -50,7 +51,6 @@ const AppleMusicIcon = () => (
 function openSpotify(song, artist) {
   window.open(`https://open.spotify.com/search/${encodeURIComponent(`${song} ${artist}`)}`, "_blank");
 }
-
 function openAppleMusic(song, artist) {
   window.open(`https://music.apple.com/search?term=${encodeURIComponent(`${song} ${artist}`)}`, "_blank");
 }
@@ -58,20 +58,10 @@ function openAppleMusic(song, artist) {
 function PlayButtons({ song, artist }) {
   return (
     <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-      <button onClick={() => openSpotify(song, artist)} style={{
-        display: "flex", alignItems: "center", gap: 6,
-        background: "rgba(30,215,96,0.12)", border: "1px solid rgba(30,215,96,0.25)",
-        borderRadius: 8, padding: "6px 12px", cursor: "pointer",
-        fontFamily: "'DM Sans',sans-serif", fontSize: 12, fontWeight: 500, color: "#1ED760",
-      }}>
+      <button onClick={() => openSpotify(song, artist)} style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(30,215,96,0.12)", border: "1px solid rgba(30,215,96,0.25)", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 12, fontWeight: 500, color: "#1ED760" }}>
         <SpotifyIcon /> Spotify
       </button>
-      <button onClick={() => openAppleMusic(song, artist)} style={{
-        display: "flex", alignItems: "center", gap: 6,
-        background: "rgba(252,60,68,0.12)", border: "1px solid rgba(252,60,68,0.25)",
-        borderRadius: 8, padding: "6px 12px", cursor: "pointer",
-        fontFamily: "'DM Sans',sans-serif", fontSize: 12, fontWeight: 500, color: "#FC3C44",
-      }}>
+      <button onClick={() => openAppleMusic(song, artist)} style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(252,60,68,0.12)", border: "1px solid rgba(252,60,68,0.25)", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 12, fontWeight: 500, color: "#FC3C44" }}>
         <AppleMusicIcon /> Apple Music
       </button>
     </div>
@@ -80,11 +70,7 @@ function PlayButtons({ song, artist }) {
 
 function MatchCard({ match, index, accentColor, badgeBg, badgeBorder }) {
   return (
-    <div className="match-card card-in" style={{
-      background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
-      borderRadius: 16, padding: 18, marginBottom: 12,
-      animationDelay: `${index * 0.08}s`, opacity: 0,
-    }}>
+    <div className="match-card card-in" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 16, padding: 18, marginBottom: 12, animationDelay: `${index * 0.08}s`, opacity: 0 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 17, fontWeight: 700, marginBottom: 2 }}>{match.song}</div>
@@ -131,8 +117,8 @@ export default function App() {
     if (!song.trim() || !artist.trim()) return;
     setLoading(true); setResults(null); setError(null); setActiveTab("other");
 
-    const prompt = `You are a world-class musicologist and music critic with encyclopedic knowledge of all genres and eras.
-Analyze the song "${song}" by "${artist}" and return ONLY a valid JSON object, no markdown, no backticks:
+    const prompt = `You are a world-class musicologist with encyclopedic knowledge of all genres and eras.
+Analyze the song "${song}" by "${artist}" and return ONLY a valid JSON object, no markdown, no backticks, no extra text:
 {
   "query": { "song": "${song}", "artist": "${artist}", "description": "2-sentence description of this song's sonic identity and mood" },
   "matches": [
@@ -142,22 +128,21 @@ Analyze the song "${song}" by "${artist}" and return ONLY a valid JSON object, n
     { "song": "Song Title", "artist": "${artist}", "year": 1995, "why": "1-2 sentences why this deep cut matches", "hiddenGem": true, "tags": { "sound": true, "instruments": true, "emotion": false, "lyrics": true, "energy": false }, "matchScore": 78 }
   ]
 }
-Rules: "matches" = exactly 6 songs from DIFFERENT artists, at least 2 from a different genre. "sameArtistMatches" = exactly 5 songs ALL by "${artist}", focus on deep cuts and B-sides NOT their biggest hits, set hiddenGem true for obscure picks.`;
+Rules: matches = exactly 6 songs from DIFFERENT artists, at least 2 from a different genre. sameArtistMatches = exactly 5 songs ALL by "${artist}", focus on deep cuts and B-sides NOT their biggest hits, set hiddenGem true for obscure picks.`;
 
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch(GEMINI_URL, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": API_KEY,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 2000, messages: [{ role: "user", content: prompt }] }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.7, maxOutputTokens: 2000 }
+        }),
       });
       const data = await response.json();
-      const text = data.content?.map(i => i.text || "").join("") || "";
-      const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      const clean = text.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(clean);
       setResults(parsed);
       setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
     } catch {
@@ -189,7 +174,6 @@ Rules: "matches" = exactly 6 songs from DIFFERENT artists, at least 2 from a dif
         .match-card:hover { transform: translateY(-2px) !important; }
         button:hover { opacity: 0.88; }
       `}</style>
-
       <div className="orb" style={{ width:500, height:500, background:"rgba(180,120,40,0.12)", top:-100, right:-100 }}/>
       <div className="orb" style={{ width:400, height:400, background:"rgba(80,60,140,0.15)", bottom:-80, left:-80 }}/>
 
@@ -203,12 +187,12 @@ Rules: "matches" = exactly 6 songs from DIFFERENT artists, at least 2 from a dif
         <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(200,149,42,0.2)", borderRadius: 20, padding: 24 }}>
           <div style={{ marginBottom: 14 }}>
             <label style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: "#8A8070", letterSpacing: "1.5px", textTransform: "uppercase", display: "block", marginBottom: 6 }}>Song Title</label>
-            <input value={song} onChange={e => setSong(e.target.value)} onKeyDown={e => e.key === "Enter" && findSimilar()} onFocus={() => setInputFocus("song")} onBlur={() => setInputFocus(null)} placeholder="e.g. Bohemian Rhapsody"
+            <input value={song} onChange={e => setSong(e.target.value)} onKeyDown={e => e.key==="Enter" && findSimilar()} onFocus={() => setInputFocus("song")} onBlur={() => setInputFocus(null)} placeholder="e.g. Bohemian Rhapsody"
               style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: `1px solid ${inputFocus==="song"?"rgba(200,149,42,0.6)":"rgba(255,255,255,0.08)"}`, borderRadius: 12, padding: "12px 16px", color: "#E8E4DC", fontSize: 16, fontFamily: "'Playfair Display',serif", transition: "border-color 0.2s" }}/>
           </div>
           <div style={{ marginBottom: 20 }}>
             <label style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: "#8A8070", letterSpacing: "1.5px", textTransform: "uppercase", display: "block", marginBottom: 6 }}>Artist</label>
-            <input value={artist} onChange={e => setArtist(e.target.value)} onKeyDown={e => e.key === "Enter" && findSimilar()} onFocus={() => setInputFocus("artist")} onBlur={() => setInputFocus(null)} placeholder="e.g. Queen"
+            <input value={artist} onChange={e => setArtist(e.target.value)} onKeyDown={e => e.key==="Enter" && findSimilar()} onFocus={() => setInputFocus("artist")} onBlur={() => setInputFocus(null)} placeholder="e.g. Queen"
               style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: `1px solid ${inputFocus==="artist"?"rgba(200,149,42,0.6)":"rgba(255,255,255,0.08)"}`, borderRadius: 12, padding: "12px 16px", color: "#E8E4DC", fontSize: 16, fontFamily: "'Playfair Display',serif", transition: "border-color 0.2s" }}/>
           </div>
           <button onClick={findSimilar} disabled={loading || !song.trim() || !artist.trim()}
@@ -244,7 +228,6 @@ Rules: "matches" = exactly 6 songs from DIFFERENT artists, at least 2 from a dif
               {results.matches?.map((match, i) => <MatchCard key={i} match={match} index={i} accentColor="#C8952A" badgeBg="rgba(200,149,42,0.15)" badgeBorder="rgba(200,149,42,0.25)"/>)}
             </div>
           )}
-
           {activeTab === "same" && (
             <div>
               <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: "#5A5450", letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 6 }}>Hidden gems & deep cuts by {results.query.artist}</div>
