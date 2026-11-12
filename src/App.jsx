@@ -1,104 +1,34 @@
-import { useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { fetchRecommendations, loadRecent, saveRecent } from "./api.js";
+import Artwork from "./components/Artwork.jsx";
+import MatchCard from "./components/MatchCard.jsx";
+import TrackLinks from "./components/TrackLinks.jsx";
+import { SearchIcon, SpinnerIcon, WaveformIcon } from "./components/Icons.jsx";
 
-const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY;
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`;
+const EXAMPLES = [
+  { song: "Dreams", artist: "Fleetwood Mac" },
+  { song: "Redbone", artist: "Childish Gambino" },
+  { song: "Midnight City", artist: "M83" },
+  { song: "Pink + White", artist: "Frank Ocean" },
+];
 
-const MATCH_TAGS = {
-  sound: { label: "Sound", color: "#FF6B6B" },
-  instruments: { label: "Instruments", color: "#4ECDC4" },
-  emotion: { label: "Emotion", color: "#FFE66D" },
-  lyrics: { label: "Lyrics", color: "#A8E6CF" },
-  energy: { label: "Energy", color: "#FF8B94" },
+const ERROR_HINTS = {
+  missing_key: "Create a free key at aistudio.google.com/apikey, put GEMINI_API_KEY=… in a .env file, and restart the dev server.",
+  invalid_key: "Double-check the key in your .env file — no quotes or spaces — then restart the dev server.",
+  rate_limited: "The free tier has per-minute limits. Waiting ~60 seconds usually fixes it.",
+  model_not_found: "Set GEMINI_MODEL in .env to a current model from ai.google.dev/gemini-api/docs/models.",
+  network: "Start the app with `npm run dev` so the /api route is available.",
 };
 
-const WaveformIcon = () => (
-  <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-    <rect x="2" y="10" width="3" height="12" rx="1.5" fill="currentColor" opacity="0.6"/>
-    <rect x="7" y="6" width="3" height="20" rx="1.5" fill="currentColor"/>
-    <rect x="12" y="3" width="3" height="26" rx="1.5" fill="currentColor"/>
-    <rect x="17" y="7" width="3" height="18" rx="1.5" fill="currentColor"/>
-    <rect x="22" y="11" width="3" height="10" rx="1.5" fill="currentColor" opacity="0.8"/>
-    <rect x="27" y="14" width="3" height="4" rx="1.5" fill="currentColor" opacity="0.5"/>
-  </svg>
-);
-
-const SpinnerIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style={{ animation: "spin 1s linear infinite" }}>
-    <circle cx="10" cy="10" r="8" stroke="currentColor" strokeWidth="2" strokeDasharray="40" strokeDashoffset="10" strokeLinecap="round"/>
-  </svg>
-);
-
-const GemIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/>
-    <line x1="12" y1="22" x2="12" y2="15.5"/>
-    <polyline points="22 8.5 12 15.5 2 8.5"/>
-  </svg>
-);
-
-const SpotifyIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/>
-  </svg>
-);
-
-const AppleMusicIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M23.994 6.124a9.23 9.23 0 00-.24-2.19c-.317-1.31-1.064-2.31-2.16-3.09a5.33 5.33 0 00-1.5-.66c-.538-.144-1.09-.216-1.64-.24-.114-.012-.73-.024-.88-.024H6.326c-.698 0-1.082.012-1.396.036-.41.036-.84.108-1.24.228C2.42 1.01 1.39 1.81.86 3.01a5.51 5.51 0 00-.43 1.44 12.63 12.63 0 00-.18 1.64c-.012.114-.018.73-.018.878v11.347c0 .698.006 1.082.03 1.396.03.41.1.84.22 1.24.318 1.27 1.12 2.3 2.32 2.83.538.24 1.1.37 1.67.4.41.03.84.04 1.24.04h11.348c.698 0 1.082-.01 1.396-.04.41-.03.84-.1 1.24-.22 1.27-.318 2.3-1.12 2.83-2.32.24-.538.37-1.1.4-1.67.03-.41.04-.84.04-1.24V7.002c0-.149-.006-.766-.018-.878zM16.77 8.26l-5.23 1.56v5.89c0 .93-.24 1.72-.77 2.3-.53.59-1.3.9-2.16.9-.87 0-1.58-.32-2.1-.88-.52-.56-.77-1.27-.77-2.05 0-.78.28-1.44.83-1.96.55-.52 1.28-.78 2.15-.78.38 0 .73.05 1.06.15V7.06c0-.49.32-.92.8-1.04l5.55-1.66c.62-.18 1.25.27 1.25.91v1.98c0 .52-.36.97-.88 1.01l.24-.01z"/>
-  </svg>
-);
-
-function openSpotify(song, artist) {
-  window.open(`https://open.spotify.com/search/${encodeURIComponent(`${song} ${artist}`)}`, "_blank");
-}
-function openAppleMusic(song, artist) {
-  window.open(`https://music.apple.com/search?term=${encodeURIComponent(`${song} ${artist}`)}`, "_blank");
-}
-
-function PlayButtons({ song, artist }) {
+function SkeletonCard({ i }) {
   return (
-    <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-      <button onClick={() => openSpotify(song, artist)} style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(30,215,96,0.12)", border: "1px solid rgba(30,215,96,0.25)", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 12, fontWeight: 500, color: "#1ED760" }}>
-        <SpotifyIcon /> Spotify
-      </button>
-      <button onClick={() => openAppleMusic(song, artist)} style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(252,60,68,0.12)", border: "1px solid rgba(252,60,68,0.25)", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 12, fontWeight: 500, color: "#FC3C44" }}>
-        <AppleMusicIcon /> Apple Music
-      </button>
-    </div>
-  );
-}
-
-function MatchCard({ match, index, accentColor, badgeBg, badgeBorder }) {
-  return (
-    <div className="match-card card-in" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 16, padding: 18, marginBottom: 12, animationDelay: `${index * 0.08}s`, opacity: 0 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 17, fontWeight: 700, marginBottom: 2 }}>{match.song}</div>
-          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: "#8A8070" }}>{match.artist} · {match.year}</div>
-        </div>
-        <div style={{ background: badgeBg, border: `1px solid ${badgeBorder}`, borderRadius: 8, padding: "4px 10px", fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: accentColor, fontWeight: 500, flexShrink: 0, marginLeft: 12 }}>
-          {match.matchScore}%
-        </div>
+    <div className="glass card skeleton" style={{ animationDelay: `${i * 0.1}s` }}>
+      <div className="sk sk-art" />
+      <div className="sk-lines">
+        <div className="sk sk-line" style={{ width: "60%" }} />
+        <div className="sk sk-line" style={{ width: "35%" }} />
+        <div className="sk sk-line" style={{ width: "85%" }} />
       </div>
-      <div style={{ height: 2, background: "rgba(255,255,255,0.06)", borderRadius: 1, marginBottom: 10, overflow: "hidden" }}>
-        <div style={{ height: "100%", width: `${match.matchScore}%`, background: `linear-gradient(90deg, ${accentColor}, #E8D5A3)`, borderRadius: 1 }}/>
-      </div>
-      <p style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: "#A89880", lineHeight: 1.6, marginBottom: 10 }}>{match.why}</p>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginBottom: 4 }}>
-        {match.hiddenGem && (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(109,207,184,0.1)", border: "1px solid rgba(109,207,184,0.25)", borderRadius: 20, padding: "3px 10px", fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: "#6DCFB8", letterSpacing: "0.5px", textTransform: "uppercase", fontWeight: 500 }}>
-            <GemIcon /> Hidden Gem
-          </span>
-        )}
-        {Object.entries(match.tags || {}).map(([key, active]) =>
-          active ? (
-            <span key={key} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 10px", borderRadius: 20, fontSize: 11, fontFamily: "'DM Sans',sans-serif", fontWeight: 500, letterSpacing: "0.5px", textTransform: "uppercase", background: `${MATCH_TAGS[key]?.color}18`, color: MATCH_TAGS[key]?.color, border: `1px solid ${MATCH_TAGS[key]?.color}30` }}>
-              {MATCH_TAGS[key]?.label}
-            </span>
-          ) : null
-        )}
-      </div>
-      <PlayButtons song={match.song} artist={match.artist} />
     </div>
   );
 }
@@ -109,138 +39,195 @@ export default function App() {
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [inputFocus, setInputFocus] = useState(null);
   const [activeTab, setActiveTab] = useState("other");
+  const [recent, setRecent] = useState(loadRecent);
+  const [playingUrl, setPlayingUrl] = useState(null);
+  const audioRef = useRef(null);
+  const abortRef = useRef(null);
   const resultsRef = useRef(null);
 
-  const findSimilar = async () => {
-    if (!song.trim() || !artist.trim()) return;
-    setLoading(true); setResults(null); setError(null); setActiveTab("other");
+  useEffect(() => () => abortRef.current?.abort(), []);
 
-    const prompt = `You are a world-class musicologist with encyclopedic knowledge of all genres and eras.
-Analyze the song "${song}" by "${artist}" and return ONLY a valid JSON object, no markdown, no backticks, no extra text:
-{
-  "query": { "song": "${song}", "artist": "${artist}", "description": "2-sentence description of this song's sonic identity and mood" },
-  "matches": [
-    { "song": "Song Title", "artist": "Different Artist", "year": 1990, "why": "1-2 sentences why this matches", "tags": { "sound": true, "instruments": false, "emotion": true, "lyrics": false, "energy": true }, "matchScore": 85 }
-  ],
-  "sameArtistMatches": [
-    { "song": "Song Title", "artist": "${artist}", "year": 1995, "why": "1-2 sentences why this deep cut matches", "hiddenGem": true, "tags": { "sound": true, "instruments": true, "emotion": false, "lyrics": true, "energy": false }, "matchScore": 78 }
-  ]
-}
-Rules: matches = exactly 6 songs from DIFFERENT artists, at least 2 from a different genre. sameArtistMatches = exactly 5 songs ALL by "${artist}", focus on deep cuts and B-sides NOT their biggest hits, set hiddenGem true for obscure picks.`;
+  const togglePreview = (url) => {
+    const audio = audioRef.current;
+    if (!audio || !url) return;
+    if (playingUrl === url) {
+      audio.pause();
+      setPlayingUrl(null);
+      return;
+    }
+    audio.src = url;
+    audio.volume = 0.6;
+    audio.play().then(() => setPlayingUrl(url)).catch(() => setPlayingUrl(null));
+  };
+
+  const search = async (s = song, a = artist) => {
+    s = s.trim();
+    a = a.trim();
+    if (!s || !a) return;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setSong(s);
+    setArtist(a);
+    setLoading(true);
+    setError(null);
+    setResults(null);
+    setActiveTab("other");
+    audioRef.current?.pause();
+    setPlayingUrl(null);
 
     try {
-      const response = await fetch(GEMINI_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.7, maxOutputTokens: 2000 }
-        }),
-      });
-      const data = await response.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      const clean = text.replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(clean);
-      setResults(parsed);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
-    } catch {
-      setError("Couldn't find matches — check the song/artist spelling and try again.");
+      const data = await fetchRecommendations(s, a, controller.signal);
+      setResults(data);
+      setRecent((cur) => saveRecent({ song: data.query.song, artist: data.query.artist }, cur));
+      requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    } catch (err) {
+      if (err.name !== "AbortError") setError({ message: err.message, code: err.code });
     } finally {
-      setLoading(false);
+      if (abortRef.current === controller) setLoading(false);
     }
   };
 
-  const tabStyle = (tab) => ({
-    flex: 1, padding: "10px 12px", fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 500,
-    border: "none", borderRadius: 10, cursor: "pointer", transition: "all 0.2s",
-    background: activeTab === tab ? (tab === "other" ? "rgba(200,149,42,0.2)" : "rgba(109,207,184,0.15)") : "transparent",
-    color: activeTab === tab ? (tab === "other" ? "#C8952A" : "#6DCFB8") : "#5A5450",
-  });
+  const reset = () => {
+    abortRef.current?.abort();
+    audioRef.current?.pause();
+    setPlayingUrl(null);
+    setResults(null);
+    setError(null);
+    setSong("");
+    setArtist("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const list = activeTab === "other" ? results?.matches : results?.sameArtistMatches;
+  const canSearch = song.trim() && artist.trim() && !loading;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#0A0A0F", color: "#E8E4DC", position: "relative", overflow: "hidden" }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Sans:wght@300;400;500&display=swap');
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes fadeUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
-        .card-in { animation: fadeUp 0.5s ease forwards; }
-        .orb { position:absolute; border-radius:50%; filter:blur(80px); pointer-events:none; }
-        input:focus { outline: none; }
-        .match-card { transition: transform 0.2s ease; }
-        .match-card:hover { transform: translateY(-2px) !important; }
-        button:hover { opacity: 0.88; }
-      `}</style>
-      <div className="orb" style={{ width:500, height:500, background:"rgba(180,120,40,0.12)", top:-100, right:-100 }}/>
-      <div className="orb" style={{ width:400, height:400, background:"rgba(80,60,140,0.15)", bottom:-80, left:-80 }}/>
-
-      <div style={{ padding: "40px 24px 0", textAlign: "center" }}>
-        <div style={{ color: "#C8952A", marginBottom: 12, animation: "float 4s ease-in-out infinite" }}><WaveformIcon /></div>
-        <h1 style={{ fontFamily: "'Playfair Display',serif", fontSize: "clamp(2rem,6vw,3.2rem)", fontWeight: 900, letterSpacing: "-1px", background: "linear-gradient(135deg,#E8D5A3 0%,#C8952A 50%,#E8D5A3 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", marginBottom: 10 }}>SoundSimilar</h1>
-        <p style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 15, color: "#8A8070", maxWidth: 440, margin: "0 auto" }}>Discover songs that share the same soul — across genres, eras, and artists</p>
+    <div className="app">
+      <div className="bg" aria-hidden="true">
+        <span className="blob b1" /><span className="blob b2" /><span className="blob b3" /><span className="blob b4" />
+        <div className="noise" />
       </div>
+      <audio ref={audioRef} onEnded={() => setPlayingUrl(null)} />
 
-      <div style={{ maxWidth: 580, margin: "36px auto 0", padding: "0 20px" }}>
-        <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(200,149,42,0.2)", borderRadius: 20, padding: 24 }}>
-          <div style={{ marginBottom: 14 }}>
-            <label style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: "#8A8070", letterSpacing: "1.5px", textTransform: "uppercase", display: "block", marginBottom: 6 }}>Song Title</label>
-            <input value={song} onChange={e => setSong(e.target.value)} onKeyDown={e => e.key==="Enter" && findSimilar()} onFocus={() => setInputFocus("song")} onBlur={() => setInputFocus(null)} placeholder="e.g. Bohemian Rhapsody"
-              style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: `1px solid ${inputFocus==="song"?"rgba(200,149,42,0.6)":"rgba(255,255,255,0.08)"}`, borderRadius: 12, padding: "12px 16px", color: "#E8E4DC", fontSize: 16, fontFamily: "'Playfair Display',serif", transition: "border-color 0.2s" }}/>
+      <header className="hero">
+        <div className="logo"><WaveformIcon /></div>
+        <h1>Sound<span>Similar</span></h1>
+        <p className="muted">Discover songs that share the same soul — across genres, eras, and artists.</p>
+      </header>
+
+      <main className="container">
+        <form
+          className="glass panel search"
+          onSubmit={(e) => {
+            e.preventDefault();
+            search();
+          }}
+        >
+          <div className="fields">
+            <label className="field">
+              <span>Song</span>
+              <input value={song} onChange={(e) => setSong(e.target.value)} placeholder="Bohemian Rhapsody" autoComplete="off" />
+            </label>
+            <label className="field">
+              <span>Artist</span>
+              <input value={artist} onChange={(e) => setArtist(e.target.value)} placeholder="Queen" autoComplete="off" />
+            </label>
           </div>
-          <div style={{ marginBottom: 20 }}>
-            <label style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: "#8A8070", letterSpacing: "1.5px", textTransform: "uppercase", display: "block", marginBottom: 6 }}>Artist</label>
-            <input value={artist} onChange={e => setArtist(e.target.value)} onKeyDown={e => e.key==="Enter" && findSimilar()} onFocus={() => setInputFocus("artist")} onBlur={() => setInputFocus(null)} placeholder="e.g. Queen"
-              style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: `1px solid ${inputFocus==="artist"?"rgba(200,149,42,0.6)":"rgba(255,255,255,0.08)"}`, borderRadius: 12, padding: "12px 16px", color: "#E8E4DC", fontSize: 16, fontFamily: "'Playfair Display',serif", transition: "border-color 0.2s" }}/>
-          </div>
-          <button onClick={findSimilar} disabled={loading || !song.trim() || !artist.trim()}
-            style={{ width: "100%", background: song&&artist&&!loading?"#C8952A":"rgba(255,255,255,0.07)", color: song&&artist&&!loading?"#0A0A0F":"#4A4440", border: "none", borderRadius: 12, padding: 14, fontSize: 15, fontFamily: "'DM Sans',sans-serif", fontWeight: 500, cursor: song&&artist&&!loading?"pointer":"not-allowed", transition: "all 0.2s", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-            {loading ? <><SpinnerIcon /> Analyzing...</> : "Find Similar Songs →"}
+          <button type="submit" className="btn-primary" disabled={!canSearch}>
+            {loading ? <><SpinnerIcon /> Listening closely…</> : <><SearchIcon /> Find similar songs</>}
           </button>
-        </div>
-      </div>
 
-      {error && (
-        <div style={{ maxWidth: 580, margin: "16px auto 0", padding: "0 20px" }}>
-          <div style={{ background: "rgba(255,80,80,0.1)", border: "1px solid rgba(255,80,80,0.2)", borderRadius: 12, padding: "12px 16px", fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: "#FF8888" }}>{error}</div>
-        </div>
-      )}
-
-      {results && (
-        <div ref={resultsRef} style={{ maxWidth: 580, margin: "32px auto 60px", padding: "0 20px" }}>
-          <div className="card-in" style={{ background: "linear-gradient(135deg,rgba(200,149,42,0.15),rgba(200,149,42,0.05))", border: "1px solid rgba(200,149,42,0.3)", borderRadius: 16, padding: 20, marginBottom: 24 }}>
-            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: "#C8952A", letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 6 }}>Analyzing</div>
-            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 20, fontWeight: 700, marginBottom: 8 }}>"{results.query.song}" <span style={{ color: "#8A8070", fontWeight: 400, fontSize: 16 }}>by {results.query.artist}</span></div>
-            <p style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: "#A89880", lineHeight: 1.6, marginBottom: 14 }}>{results.query.description}</p>
-            <PlayButtons song={results.query.song} artist={results.query.artist} />
-          </div>
-
-          <div style={{ display: "flex", gap: 6, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, padding: 4, marginBottom: 20 }}>
-            <button style={tabStyle("other")} onClick={() => setActiveTab("other")}>🎵 Other Artists ({results.matches?.length || 0})</button>
-            <button style={tabStyle("same")} onClick={() => setActiveTab("same")}>💎 Same Artist ({results.sameArtistMatches?.length || 0})</button>
-          </div>
-
-          {activeTab === "other" && (
-            <div>
-              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: "#5A5450", letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 14 }}>Songs from different artists with similar sound</div>
-              {results.matches?.map((match, i) => <MatchCard key={i} match={match} index={i} accentColor="#C8952A" badgeBg="rgba(200,149,42,0.15)" badgeBorder="rgba(200,149,42,0.25)"/>)}
+          {!results && !loading && (
+            <div className="chips">
+              <span className="chips-label">{recent.length ? "Recent" : "Try"}</span>
+              {(recent.length ? recent : EXAMPLES).map((ex) => (
+                <button type="button" key={`${ex.song}-${ex.artist}`} className="chip" onClick={() => search(ex.song, ex.artist)}>
+                  {ex.song} <em>· {ex.artist}</em>
+                </button>
+              ))}
             </div>
           )}
-          {activeTab === "same" && (
-            <div>
-              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: "#5A5450", letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 6 }}>Hidden gems & deep cuts by {results.query.artist}</div>
-              <p style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: "#5A5450", marginBottom: 16, lineHeight: 1.6 }}>Other {results.query.artist} songs that share the same sonic DNA — tracks most fans have never heard.</p>
-              {results.sameArtistMatches?.map((match, i) => <MatchCard key={i} match={match} index={i} accentColor="#6DCFB8" badgeBg="rgba(109,207,184,0.12)" badgeBorder="rgba(109,207,184,0.25)"/>)}
-            </div>
-          )}
+        </form>
 
-          <button onClick={() => { setResults(null); setSong(""); setArtist(""); setError(null); }} style={{ width: "100%", marginTop: 16, background: "transparent", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: 12, color: "#5A5450", fontFamily: "'DM Sans',sans-serif", fontSize: 14, cursor: "pointer" }}>
-            Search Again
-          </button>
-        </div>
-      )}
+        {error && (
+          <div className="glass panel error card-in" role="alert">
+            <strong>Search failed</strong>
+            <p>{error.message}</p>
+            {ERROR_HINTS[error.code] && <p className="muted small">{ERROR_HINTS[error.code]}</p>}
+          </div>
+        )}
+
+        {loading && (
+          <section className="results" aria-busy="true">
+            {[0, 1, 2].map((i) => <SkeletonCard key={i} i={i} />)}
+          </section>
+        )}
+
+        {results && (
+          <section ref={resultsRef} className="results">
+            <div className="glass panel now card-in">
+              <Artwork
+                track={results.query}
+                size={112}
+                playing={playingUrl === results.query.previewUrl}
+                onTogglePreview={() => togglePreview(results.query.previewUrl)}
+              />
+              <div className="now-body">
+                <div className="eyebrow">Analyzing</div>
+                <h2>{results.query.song}</h2>
+                <p className="muted">
+                  {results.query.artist}
+                  {results.query.year ? ` · ${results.query.year}` : ""}
+                  {results.query.genre ? ` · ${results.query.genre}` : ""}
+                </p>
+                <p className="desc">{results.query.description}</p>
+                <TrackLinks song={results.query.song} artist={results.query.artist} appleUrl={results.query.appleUrl} />
+              </div>
+            </div>
+
+            <div className="glass segmented" role="tablist">
+              <button role="tab" aria-selected={activeTab === "other"} className={activeTab === "other" ? "on" : ""} onClick={() => setActiveTab("other")}>
+                Other artists <b>{results.matches?.length || 0}</b>
+              </button>
+              <button role="tab" aria-selected={activeTab === "same"} className={activeTab === "same" ? "on" : ""} onClick={() => setActiveTab("same")}>
+                Deep cuts by {results.query.artist} <b>{results.sameArtistMatches?.length || 0}</b>
+              </button>
+              <span className="seg-indicator" style={{ transform: `translateX(${activeTab === "other" ? 0 : 100}%)` }} />
+            </div>
+
+            <div key={activeTab}>
+              {list?.map((m, i) => (
+                <MatchCard
+                  key={`${m.song}-${m.artist}-${i}`}
+                  match={m}
+                  index={i}
+                  playing={!!m.previewUrl && playingUrl === m.previewUrl}
+                  onTogglePreview={() => togglePreview(m.previewUrl)}
+                  onExplore={(t) => search(t.song, t.artist)}
+                />
+              ))}
+              {!list?.length && <p className="muted center">No matches in this category.</p>}
+            </div>
+
+            <button type="button" className="btn-ghost" onClick={reset}>Start a new search</button>
+            <p className="footnote">
+              Recommendations by Google Gemini{results.model ? ` (${results.model})` : ""}. Artwork &amp; previews via iTunes. AI picks can occasionally be off — a ✓ means the track was found in the iTunes catalog.
+            </p>
+          </section>
+        )}
+      </main>
+
+      <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true">
+        <defs>
+          <linearGradient id="scoreGrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#7cf2ff" />
+            <stop offset="100%" stopColor="#c08bff" />
+          </linearGradient>
+        </defs>
+      </svg>
     </div>
   );
 }
