@@ -1,6 +1,5 @@
-// Vercel serverless function: POST /api/recommend { song, artist }
-import { handleRecommend } from "../server/recommend.js";
+import { recommendHandler } from "../server/handlers.js";
 
 export default function handler(req, res) {
-  return handleRecommend(req, res, process.env);
+  return recommendHandler(req, res, process.env);
 }

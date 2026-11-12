@@ -1,9 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import { fetchRecommendations, loadRecent, saveRecent } from "./api.js";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchConfig, fetchPopular, fetchRecommendations, loadRecent, previewUrl, saveRecent } from "./api.js";
+import { readUrlState, shareResults, syncUrl, tracklistText } from "./lib/share.js";
+import { completeSpotifyLogin, savePlaylist, startSpotifySave } from "./lib/spotify.js";
+import { prepareAppleMusic, saveToAppleMusic } from "./lib/appleMusic.js";
 import Artwork from "./components/Artwork.jsx";
-import MatchCard from "./components/MatchCard.jsx";
+import MatchCard, { SOURCE_LABELS } from "./components/MatchCard.jsx";
+import SearchBox from "./components/SearchBox.jsx";
 import TrackLinks from "./components/TrackLinks.jsx";
-import { SearchIcon, SpinnerIcon, WaveformIcon } from "./components/Icons.jsx";
+import { AppleMusicIcon, CopyIcon, ShareIcon, SpinnerIcon, SpotifyIcon, WaveformIcon } from "./components/Icons.jsx";
 
 const EXAMPLES = [
   { song: "Dreams", artist: "Fleetwood Mac" },
@@ -13,11 +17,9 @@ const EXAMPLES = [
 ];
 
 const ERROR_HINTS = {
-  missing_key: "Create a free key at aistudio.google.com/apikey, put GEMINI_API_KEY=… in a .env file, and restart the dev server.",
-  invalid_key: "Double-check the key in your .env file — no quotes or spaces — then restart the dev server.",
-  rate_limited: "The free tier has per-minute limits. Waiting ~60 seconds usually fixes it.",
-  model_not_found: "Set GEMINI_MODEL in .env to a current model from ai.google.dev/gemini-api/docs/models.",
-  network: "Start the app with `npm run dev` so the /api route is available.",
+  not_found: "Pick the song from the dropdown so we search the exact catalog entry.",
+  network: "Check your connection, or start the app with `npm run dev` so the /api routes are available.",
+  timeout: "One of the music services was slow. Trying again usually works.",
 };
 
 function SkeletonCard({ i }) {
@@ -33,20 +35,131 @@ function SkeletonCard({ i }) {
   );
 }
 
+function ChipRow({ label, items, onPick }) {
+  if (!items.length) return null;
+  return (
+    <div className="chips">
+      <span className="chips-label">{label}</span>
+      {items.map((ex) => (
+        <button type="button" key={`${ex.song}-${ex.artist}`} className="chip" onClick={() => onPick(ex)}>
+          {ex.song} <em>· {ex.artist}</em>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const playlistFrom = (results) => ({
+  name: `SoundSimilar: ${results.query.song} – ${results.query.artist}`,
+  description: `Songs that sound like "${results.query.song}" by ${results.query.artist}, found with SoundSimilar.`,
+  tracks: [results.query, ...results.matches, ...results.sameArtistMatches].map((t) => ({ song: t.song, artist: t.artist })),
+});
+
 export default function App() {
-  const [song, setSong] = useState("");
-  const [artist, setArtist] = useState("");
+  const [current, setCurrent] = useState(() => readUrlState());
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [activeTab, setActiveTab] = useState("other");
+  const [activeTab, setActiveTab] = useState(() => readUrlState()?.tab || "other");
   const [recent, setRecent] = useState(loadRecent);
+  const [popular, setPopular] = useState([]);
+  const [config, setConfig] = useState({});
   const [playingUrl, setPlayingUrl] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [saving, setSaving] = useState(null);
   const audioRef = useRef(null);
   const abortRef = useRef(null);
   const resultsRef = useRef(null);
+  const toastTimer = useRef(null);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  const notify = useCallback((message, opts = {}) => {
+    clearTimeout(toastTimer.current);
+    setToast({ message, ...opts });
+    toastTimer.current = setTimeout(() => setToast(null), opts.link ? 9000 : 4500);
+  }, []);
+
+  const search = useCallback(async ({ song, artist }, { push = true, tab = "other" } = {}) => {
+    song = song?.trim();
+    artist = artist?.trim();
+    if (!song || !artist) return;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setCurrent({ song, artist });
+    setLoading(true);
+    setError(null);
+    setResults(null);
+    setActiveTab(tab);
+    audioRef.current?.pause();
+    setPlayingUrl(null);
+    if (push) syncUrl({ song, artist, tab });
+
+    try {
+      const data = await fetchRecommendations(song, artist, controller.signal);
+      setResults(data);
+      setCurrent({ song: data.query.song, artist: data.query.artist });
+      syncUrl({ song: data.query.song, artist: data.query.artist, tab }, { replace: true });
+      setRecent((cur) => saveRecent({ song: data.query.song, artist: data.query.artist }, cur));
+      requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    } catch (err) {
+      if (err.name !== "AbortError") setError({ message: err.message, code: err.code });
+    } finally {
+      if (abortRef.current === controller) setLoading(false);
+    }
+  }, []);
+
+  // Startup: config, popular list, return from Spotify login, shared links.
+  useEffect(() => {
+    let alive = true;
+    fetchPopular().then((p) => alive && setPopular(p));
+    fetchConfig().then(async (cfg) => {
+      if (!alive) return;
+      setConfig(cfg);
+      if (!cfg.spotifyClientId) return;
+      const params = new URLSearchParams(window.location.search);
+      const returningFromSpotify = params.has("state") && (params.has("code") || params.has("error"));
+      try {
+        const done = await completeSpotifyLogin(cfg.spotifyClientId);
+        // completeSpotifyLogin restored the pre-login URL — reload those results.
+        const restored = returningFromSpotify && readUrlState();
+        if (restored) search(restored, { push: false, tab: restored.tab });
+        if (done?.pending) {
+          setSaving("spotify");
+          const r = await savePlaylist(done.token, done.pending);
+          notify(`Saved ${r.added} songs to Spotify${r.missing ? ` (${r.missing} not found)` : ""}.`, { link: r.url, linkLabel: "Open playlist" });
+        }
+      } catch (err) {
+        notify(err.message, { error: true });
+      } finally {
+        setSaving(null);
+      }
+    });
+
+    const initial = readUrlState();
+    if (initial) search(initial, { push: false, tab: initial.tab });
+
+    const onPop = () => {
+      const s = readUrlState();
+      if (s) search(s, { push: false, tab: s.tab });
+      else {
+        abortRef.current?.abort();
+        setResults(null);
+        setCurrent(null);
+        setError(null);
+      }
+    };
+    window.addEventListener("popstate", onPop);
+    return () => {
+      alive = false;
+      window.removeEventListener("popstate", onPop);
+      abortRef.current?.abort();
+    };
+  }, [search, notify]);
+
+  useEffect(() => {
+    if (results && config.appleMusic) prepareAppleMusic().catch(() => {});
+  }, [results, config.appleMusic]);
 
   const togglePreview = (url) => {
     const audio = audioRef.current;
@@ -58,36 +171,15 @@ export default function App() {
     }
     audio.src = url;
     audio.volume = 0.6;
-    audio.play().then(() => setPlayingUrl(url)).catch(() => setPlayingUrl(null));
+    audio.play().then(() => setPlayingUrl(url)).catch(() => {
+      setPlayingUrl(null);
+      notify("Preview isn't available for this track.", { error: true });
+    });
   };
 
-  const search = async (s = song, a = artist) => {
-    s = s.trim();
-    a = a.trim();
-    if (!s || !a) return;
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    setSong(s);
-    setArtist(a);
-    setLoading(true);
-    setError(null);
-    setResults(null);
-    setActiveTab("other");
-    audioRef.current?.pause();
-    setPlayingUrl(null);
-
-    try {
-      const data = await fetchRecommendations(s, a, controller.signal);
-      setResults(data);
-      setRecent((cur) => saveRecent({ song: data.query.song, artist: data.query.artist }, cur));
-      requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
-    } catch (err) {
-      if (err.name !== "AbortError") setError({ message: err.message, code: err.code });
-    } finally {
-      if (abortRef.current === controller) setLoading(false);
-    }
+  const changeTab = (tab) => {
+    setActiveTab(tab);
+    if (results) syncUrl({ song: results.query.song, artist: results.query.artist, tab }, { replace: true });
   };
 
   const reset = () => {
@@ -96,13 +188,56 @@ export default function App() {
     setPlayingUrl(null);
     setResults(null);
     setError(null);
-    setSong("");
-    setArtist("");
+    setCurrent(null);
+    syncUrl(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  const onShare = async () => {
+    try {
+      const how = await shareResults({ song: results.query.song, artist: results.query.artist, tab: activeTab });
+      if (how === "copied") notify("Link copied — anyone who opens it sees these results.");
+    } catch {
+      notify("Couldn't copy the link.", { error: true });
+    }
+  };
+
+  const onCopyList = async () => {
+    try {
+      await navigator.clipboard.writeText(tracklistText(results));
+      notify("Tracklist copied. Paste it into TuneMyMusic or Soundiiz to import it into any streaming service.");
+    } catch {
+      notify("Couldn't copy the tracklist.", { error: true });
+    }
+  };
+
+  const onSpotify = async () => {
+    setSaving("spotify");
+    try {
+      const r = await startSpotifySave(config.spotifyClientId, playlistFrom(results));
+      notify(`Saved ${r.added} songs to Spotify${r.missing ? ` (${r.missing} not found)` : ""}.`, { link: r.url, linkLabel: "Open playlist" });
+    } catch (err) {
+      notify(err.message, { error: true });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const onApple = async () => {
+    setSaving("apple");
+    try {
+      const r = await saveToAppleMusic(playlistFrom(results));
+      notify(`Saved ${r.added} songs to your Apple Music library${r.missing ? ` (${r.missing} not found)` : ""}.`);
+    } catch (err) {
+      notify(err?.message || "Apple Music sign-in was cancelled.", { error: true });
+    } finally {
+      setSaving(null);
+    }
+  };
+
   const list = activeTab === "other" ? results?.matches : results?.sameArtistMatches;
-  const canSearch = song.trim() && artist.trim() && !loading;
+  const popularChips = popular.length >= 3 ? popular.slice(0, 6) : EXAMPLES;
+  const sourceNames = (results?.meta?.sources || []).map((s) => SOURCE_LABELS[s] || s);
 
   return (
     <div className="app">
@@ -113,44 +248,21 @@ export default function App() {
       <audio ref={audioRef} onEnded={() => setPlayingUrl(null)} />
 
       <header className="hero">
-        <div className="logo"><WaveformIcon /></div>
+        <button type="button" className="logo" onClick={reset} aria-label="SoundSimilar home"><WaveformIcon /></button>
         <h1>Sound<span>Similar</span></h1>
-        <p className="muted">Discover songs that share the same soul — across genres, eras, and artists.</p>
+        <p className="muted">Discover real songs that share the same soul — across genres, eras, and artists.</p>
       </header>
 
       <main className="container">
-        <form
-          className="glass panel search"
-          onSubmit={(e) => {
-            e.preventDefault();
-            search();
-          }}
-        >
-          <div className="fields">
-            <label className="field">
-              <span>Song</span>
-              <input value={song} onChange={(e) => setSong(e.target.value)} placeholder="Bohemian Rhapsody" autoComplete="off" />
-            </label>
-            <label className="field">
-              <span>Artist</span>
-              <input value={artist} onChange={(e) => setArtist(e.target.value)} placeholder="Queen" autoComplete="off" />
-            </label>
-          </div>
-          <button type="submit" className="btn-primary" disabled={!canSearch}>
-            {loading ? <><SpinnerIcon /> Listening closely…</> : <><SearchIcon /> Find similar songs</>}
-          </button>
-
+        <section className="glass panel search">
+          <SearchBox onPick={(t) => search(t)} busy={loading} initial={current} />
           {!results && !loading && (
-            <div className="chips">
-              <span className="chips-label">{recent.length ? "Recent" : "Try"}</span>
-              {(recent.length ? recent : EXAMPLES).map((ex) => (
-                <button type="button" key={`${ex.song}-${ex.artist}`} className="chip" onClick={() => search(ex.song, ex.artist)}>
-                  {ex.song} <em>· {ex.artist}</em>
-                </button>
-              ))}
-            </div>
+            <>
+              <ChipRow label="Recent" items={recent} onPick={(t) => search(t)} />
+              <ChipRow label={popular.length >= 3 ? "Popular" : "Try"} items={popularChips} onPick={(t) => search(t)} />
+            </>
           )}
-        </form>
+        </section>
 
         {error && (
           <div className="glass panel error card-in" role="alert">
@@ -172,8 +284,8 @@ export default function App() {
               <Artwork
                 track={results.query}
                 size={112}
-                playing={playingUrl === results.query.previewUrl}
-                onTogglePreview={() => togglePreview(results.query.previewUrl)}
+                playing={playingUrl === previewUrl(results.query)}
+                onTogglePreview={() => togglePreview(previewUrl(results.query))}
               />
               <div className="now-body">
                 <div className="eyebrow">Analyzing</div>
@@ -183,16 +295,33 @@ export default function App() {
                   {results.query.year ? ` · ${results.query.year}` : ""}
                   {results.query.genre ? ` · ${results.query.genre}` : ""}
                 </p>
-                <p className="desc">{results.query.description}</p>
-                <TrackLinks song={results.query.song} artist={results.query.artist} appleUrl={results.query.appleUrl} />
+                {results.query.description && <p className="desc">{results.query.description}</p>}
+                <TrackLinks song={results.query.song} artist={results.query.artist} deezerUrl={results.query.deezerUrl} />
               </div>
             </div>
 
+            <div className="toolbar card-in">
+              <button type="button" className="pill pill-ghost" onClick={onShare}><ShareIcon /> Share results</button>
+              {config.spotifyClientId && (
+                <button type="button" className="pill pill-spotify" onClick={onSpotify} disabled={!!saving}>
+                  {saving === "spotify" ? <SpinnerIcon /> : <SpotifyIcon />} Save to Spotify
+                </button>
+              )}
+              {config.appleMusic && (
+                <button type="button" className="pill pill-apple" onClick={onApple} disabled={!!saving}>
+                  {saving === "apple" ? <SpinnerIcon /> : <AppleMusicIcon />} Save to Apple Music
+                </button>
+              )}
+              <button type="button" className="pill pill-ghost" onClick={onCopyList}><CopyIcon /> Copy tracklist</button>
+            </div>
+
+            {results.meta?.aiNotice && <p className="notice">{results.meta.aiNotice}</p>}
+
             <div className="glass segmented" role="tablist">
-              <button role="tab" aria-selected={activeTab === "other"} className={activeTab === "other" ? "on" : ""} onClick={() => setActiveTab("other")}>
+              <button role="tab" aria-selected={activeTab === "other"} className={activeTab === "other" ? "on" : ""} onClick={() => changeTab("other")}>
                 Other artists <b>{results.matches?.length || 0}</b>
               </button>
-              <button role="tab" aria-selected={activeTab === "same"} className={activeTab === "same" ? "on" : ""} onClick={() => setActiveTab("same")}>
+              <button role="tab" aria-selected={activeTab === "same"} className={activeTab === "same" ? "on" : ""} onClick={() => changeTab("same")}>
                 Deep cuts by {results.query.artist} <b>{results.sameArtistMatches?.length || 0}</b>
               </button>
               <span className="seg-indicator" style={{ transform: `translateX(${activeTab === "other" ? 0 : 100}%)` }} />
@@ -204,9 +333,9 @@ export default function App() {
                   key={`${m.song}-${m.artist}-${i}`}
                   match={m}
                   index={i}
-                  playing={!!m.previewUrl && playingUrl === m.previewUrl}
-                  onTogglePreview={() => togglePreview(m.previewUrl)}
-                  onExplore={(t) => search(t.song, t.artist)}
+                  playing={!!previewUrl(m) && playingUrl === previewUrl(m)}
+                  onTogglePreview={() => togglePreview(previewUrl(m))}
+                  onExplore={(t) => search({ song: t.song, artist: t.artist })}
                 />
               ))}
               {!list?.length && <p className="muted center">No matches in this category.</p>}
@@ -214,11 +343,20 @@ export default function App() {
 
             <button type="button" className="btn-ghost" onClick={reset}>Start a new search</button>
             <p className="footnote">
-              Recommendations by Google Gemini{results.model ? ` (${results.model})` : ""}. Artwork &amp; previews via iTunes. AI picks can occasionally be off — a ✓ means the track was found in the iTunes catalog.
+              Every song is a real catalog track{sourceNames.length ? `, found via ${sourceNames.join(" + ")}` : ""}.
+              {results.meta?.model ? ` Ranked and explained by Google Gemini (${results.meta.model}).` : ""} Previews via Deezer.
             </p>
           </section>
         )}
       </main>
+
+      {toast && (
+        <div className={`toast glass ${toast.error ? "toast-error" : ""}`} role="status">
+          <span>{toast.message}</span>
+          {toast.link && <a href={toast.link} target="_blank" rel="noreferrer">{toast.linkLabel || "Open"}</a>}
+          <button type="button" aria-label="Dismiss" onClick={() => setToast(null)}>×</button>
+        </div>
+      )}
 
       <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true">
         <defs>

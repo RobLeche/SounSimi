@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { PauseIcon, PlayIcon } from "./Icons.jsx";
+import { previewUrl } from "../api.js";
 
 // Deterministic gradient so tracks without artwork still look distinct.
 function hue(text) {
@@ -9,14 +11,15 @@ function hue(text) {
 
 export default function Artwork({ track, size = 72, playing, onTogglePreview }) {
   const h = hue(`${track.song}${track.artist}`);
+  const [broken, setBroken] = useState(null);
   return (
     <div className="art" style={{ width: size, height: size }}>
-      {track.artwork ? (
-        <img src={track.artwork} alt="" loading="lazy" />
+      {track.artwork && broken !== track.artwork ? (
+        <img src={track.artwork} alt="" loading="lazy" onError={() => setBroken(track.artwork)} />
       ) : (
         <div className="art-fallback" style={{ background: `linear-gradient(135deg, hsl(${h} 80% 60%), hsl(${(h + 60) % 360} 80% 45%))` }} />
       )}
-      {track.previewUrl && (
+      {previewUrl(track) && (
         <button
           type="button"
           className={`art-play ${playing ? "is-playing" : ""}`}

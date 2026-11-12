@@ -2,6 +2,8 @@ import Artwork from "./Artwork.jsx";
 import TrackLinks from "./TrackLinks.jsx";
 import { GemIcon, LoopIcon } from "./Icons.jsx";
 
+export const SOURCE_LABELS = { lastfm: "Last.fm", deezer: "Deezer", gemini: "Gemini (verified on Deezer)" };
+
 export const MATCH_TAGS = {
   sound: { label: "Sound", color: "#ff7a9a" },
   instruments: { label: "Instruments", color: "#5ee7df" },
@@ -34,7 +36,7 @@ export default function MatchCard({ match, index, playing, onTogglePreview, onEx
         <div className="match-meta">
           <h3>
             {match.song}
-            {match.verified && <span className="verified" title="Found in the iTunes catalog">✓</span>}
+            <span className="verified" title={`Real track — found via ${(match.sources || []).map((x) => SOURCE_LABELS[x.split("-")[0]] || x).filter((v, i, a) => a.indexOf(v) === i).join(" + ")}`}>✓</span>
           </h3>
           <p className="muted">
             {match.artist}
@@ -55,7 +57,7 @@ export default function MatchCard({ match, index, playing, onTogglePreview, onEx
       </div>
       <p className="why">{match.why}</p>
       <div className="card-actions">
-        <TrackLinks song={match.song} artist={match.artist} appleUrl={match.appleUrl} />
+        <TrackLinks song={match.song} artist={match.artist} deezerUrl={match.deezerUrl} />
         <button type="button" className="pill pill-ghost" onClick={() => onExplore(match)}>
           <LoopIcon /> More like this
         </button>

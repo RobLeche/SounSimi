@@ -250,3 +250,54 @@ h1 span {
   .now .links { justify-content: center; }
   .segmented button { font-size: 12px; }
 }
+
+/* ---------- v2.1: autocomplete, toolbar, toasts ---------- */
+button.logo { cursor: pointer; padding: 0; }
+.searchbox { position: relative; }
+.searchbox .field { margin-bottom: 12px; }
+.input-wrap { position: relative; display: flex; align-items: center; }
+.input-wrap > svg { position: absolute; left: 15px; color: var(--faint); pointer-events: none; }
+.input-wrap > svg.spin { left: auto; right: 15px; }
+.input-wrap input { padding-left: 42px; padding-right: 42px; }
+
+.suggestions {
+  position: absolute; z-index: 20; left: 0; right: 0; top: 84px; list-style: none;
+  padding: 6px; border-radius: 16px; max-height: 360px; overflow-y: auto;
+  background: linear-gradient(135deg, rgba(40, 32, 70, 0.92), rgba(24, 20, 44, 0.94));
+}
+.suggestions li {
+  display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 12px; cursor: pointer;
+}
+.suggestions li.active { background: rgba(255, 255, 255, 0.1); }
+.suggestions img, .sugg-art {
+  width: 40px; height: 40px; border-radius: 8px; flex-shrink: 0; object-fit: cover;
+  background: linear-gradient(135deg, rgba(124, 242, 255, 0.3), rgba(192, 139, 255, 0.3));
+}
+.sugg-text { display: grid; min-width: 0; }
+.sugg-text b, .sugg-text em { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sugg-text b { font-weight: 600; }
+.sugg-text em { font-style: normal; font-size: 13px; color: var(--muted); }
+.hint { margin: -4px 4px 12px; font-size: 13px; color: #ffb3c4; }
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.toolbar .pill { padding: 8px 14px; font-size: 13px; }
+.pill:disabled { opacity: 0.55; cursor: wait; transform: none; }
+.pill-deezer { color: #c9a7ff; background: rgba(162, 56, 255, 0.1); border-color: rgba(162, 56, 255, 0.3); }
+
+.notice {
+  margin: 0 0 14px; padding: 10px 14px; border-radius: 14px; font-size: 13px; color: #ffe2a8;
+  background: rgba(255, 196, 80, 0.1); border: 1px solid rgba(255, 196, 80, 0.28);
+}
+
+.toast {
+  position: fixed; z-index: 50; left: 50%; bottom: 24px; transform: translateX(-50%);
+  width: min(560px, calc(100vw - 32px)); display: flex; align-items: center; gap: 12px;
+  padding: 12px 12px 12px 16px; border-radius: 16px; font-size: 14px;
+  background: linear-gradient(135deg, rgba(50, 40, 90, 0.9), rgba(28, 22, 50, 0.92));
+  animation: fadeUp 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.toast span { flex: 1; }
+.toast a { font-weight: 700; color: var(--accent-1); white-space: nowrap; }
+.toast button { border: 0; background: rgba(255, 255, 255, 0.1); width: 28px; height: 28px; border-radius: 50%; cursor: pointer; font-size: 18px; line-height: 1; flex-shrink: 0; }
+.toast-error { border-color: rgba(255, 110, 140, 0.45); }
+.panel.search { z-index: 10; } /* keep the suggestions dropdown above results */

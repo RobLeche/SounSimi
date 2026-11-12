@@ -1,57 +1,118 @@
 # SoundSimilar
 
-Find songs that share the same soul as one you love, across genres, eras and artists. Each result comes with a match score, why it matches, 30‑second previews and links to Spotify, Apple Music and YouTube Music.
+Find **real** songs that share the same soul as one you love, across genres, eras and artists. Start typing, pick a real track from the autocomplete, and get:
 
-## Why searches were failing
+- **6 sonic matches by other artists** and **5 deep cuts by the same artist**
+- 30-second previews, artwork, match scores and the reason each song matches
+- Links to Spotify, Apple Music, YouTube Music and Deezer
+- **Save as a playlist** to Spotify or Apple Music, or copy the tracklist
+- **Shareable links**: every result page has its own URL (`?song=…&artist=…`)
 
-The old version called Google's **`gemini-2.0-flash`** model. **Google shut that model down on June 1, 2026**, so every request now fails. The old code also caught every error and showed one generic "check the spelling" message, which hid the real cause.
+## How it finds real songs (not made-up ones)
 
-The fix:
+```
+ your pick ──► Deezer (resolve the exact track)
+                 │
+                 ├─► Last.fm track.getSimilar      "listeners who play X also play Y"
+                 ├─► Deezer artist radio            similar-sounding mix
+                 ├─► Deezer related artists → top tracks
+                 └─► Deezer + Last.fm artist top tracks (for deep cuts)
+                          │
+                          ▼
+             ~40 real candidate tracks (each has an id)
+                          │
+                          ▼
+   Gemini ranks + explains them ── it can ONLY return ids from the list,
+                                    so it can't invent songs
+```
 
-- The app now uses **`gemini-3.6-flash`** (Google's named replacement). If that model is ever unavailable, it automatically tries `gemini-3.5-flash-lite` and then `gemini-2.5-flash-lite`. You can choose a different model with `GEMINI_MODEL`.
-- The API key now stays **on the server** (`/api/recommend`). Before, it was a `VITE_` variable, which Vite builds into the JavaScript bundle, so anyone could copy it from your site.
-- Gemini's **structured JSON output** (`responseSchema`) replaces "please return JSON" prompting. The answer can't arrive malformed or cut off halfway.
-- **Real error messages:** missing key, rejected key, rate limit, retired model and timeout each get a clear message with a hint for fixing it.
+- With **no Gemini key** (or once the free quota runs out), the app still works. It ranks by listening data and shows a notice instead of failing.
+- For very obscure songs with no listening data, Gemini suggests songs, and **only those found on Deezer are kept**.
 
-## Run it locally
+## Setup
 
 ```bash
 npm install
-cp .env.example .env      # then paste your key into .env
-npm run dev
+cp .env.example .env   # fill in keys
+npm run dev            # → http://127.0.0.1:5173
 ```
 
-You can get a free Gemini API key at <https://aistudio.google.com/apikey>. Put it in `.env` as `GEMINI_API_KEY=...`. Don't add the `VITE_` prefix: that would expose the key in the browser. The old `VITE_GOOGLE_API_KEY` name still works on the server as a fallback.
+| Variable | Needed? | Where to get it |
+|---|---|---|
+| `GEMINI_API_KEY` | For AI explanations | <https://aistudio.google.com/apikey> (free) |
+| `LASTFM_API_KEY` | Strongly recommended | <https://www.last.fm/api/account/create> (free, instant) |
+| `KV_REST_API_URL` / `KV_REST_API_TOKEN` | Optional cache | Vercel → Storage → **Upstash for Redis** (free tier). Added automatically when connected |
+| `SPOTIFY_CLIENT_ID` | Optional | <https://developer.spotify.com/dashboard> |
+| `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` | Optional | Apple Developer → Keys → MusicKit (paid account) |
 
-## Deploy
+Deezer and iTunes need no key.
 
-The app needs a small server function, so **static-only hosts like GitHub Pages won't work by themselves.**
+## Deploying on Vercel
 
-- **Vercel (easiest):** import the repo, add `GEMINI_API_KEY` under *Settings → Environment Variables*, then deploy. `api/recommend.js` is picked up automatically.
-- **Netlify / Cloudflare:** wrap `server/recommend.js`'s `recommend()` in a function for that platform (it's plain Node/fetch).
+1. **Settings → Environment Variables**: add `GEMINI_API_KEY` and `LASTFM_API_KEY`. Tick **Production and Preview**.
+2. **Redeploy.** Vercel only gives variables to deployments made after you add them. Go to Deployments → ⋯ → Redeploy.
+3. Open **`https://<your-app>.vercel.app/api/health`**. It lists which keys the server can see (never their values) and what's missing.
+
+## Caching (saves your free quota)
+
+1. **Vercel's CDN** caches every `/api/recommend?song=…&artist=…` response for a day, then serves it stale for up to a week while refreshing in the background. Popular searches never reach the function or Gemini.
+2. **Upstash Redis** (optional, free tier) stores AI results for 30 days, shared across all server instances.
+3. **In-memory cache** inside each running function.
+
+Results ranked without AI are cached for only an hour, so they're upgraded once Gemini is available again. The home screen shows **Popular** searches, tracked in Redis when it's connected.
+
+## Save to Spotify
+
+1. Create an app at <https://developer.spotify.com/dashboard> and choose **Web API**.
+2. Add these Redirect URIs exactly (with the trailing slash):
+   - `https://<your-app>.vercel.app/`
+   - `http://127.0.0.1:5173/` (Spotify no longer accepts `localhost`)
+3. Put the Client ID in `SPOTIFY_CLIENT_ID`. It isn't secret, and no client secret is needed (PKCE login).
+4. **Spotify's 2026 limits for unapproved ("Development Mode") apps:** the app owner needs **Spotify Premium**, and only **5 users** can log in. Add them under *User Management* in the dashboard. Allowing everyone requires applying for Extended Quota, which Spotify only grants to established businesses. For everyone else, **Copy tracklist** works: paste it into TuneMyMusic or Soundiiz to import it anywhere.
+
+## Save to Apple Music
+
+1. Requires the **Apple Developer Program** ($99/yr).
+2. Create a **Media ID**, then a **Key** with MusicKit enabled. Download the `.p8` file.
+3. Set `APPLE_TEAM_ID`, `APPLE_KEY_ID` and `APPLE_PRIVATE_KEY` (the whole `.p8` contents; `\n` line breaks are fine). Optionally set `APPLE_ALLOWED_ORIGINS` to your domain.
+4. The server signs a MusicKit developer token at `/api/apple-token`. Listeners need an Apple Music subscription, and the playlist goes into their library.
+
+The button only appears when this is configured.
+
+## Free music data sources
+
+| Source | Key | Good for | Used here |
+|---|---|---|---|
+| **Last.fm API** | free key | Similar tracks and artists from real listening data, tags, top tracks | ✅ |
+| **Deezer API** | none | Search/autocomplete, artist radio (similar mix), related artists, 30 s previews, artwork, ISRCs | ✅ |
+| **iTunes Search API** | none | Search fallback, artwork, previews (~20 req/min limit) | ✅ fallback |
+| **ListenBrainz** (labs API) | none | Open similar-artist and similar-recording data from scrobbles | Good next addition |
+| **MusicBrainz** | none (1 req/s, needs a User-Agent) | Canonical IDs, release dates, ISRC lookups | Good for exact years |
+| **TheAudioDB** | free test key | Artist bios, genres, mood, artwork | Nice extra |
+| **Discogs** | free token | Release details, credits, styles (great for vinyl and older music) | Nice extra |
+| **Spotify Web API** | OAuth | Saving playlists and deep links only. Its recommendations, related artists and audio features were removed for new apps | ✅ playlists |
+| ~~AcousticBrainz~~ | — | Shut down in 2022 | ❌ |
+
+## API routes
+
+| Route | What it does |
+|---|---|
+| `GET /api/recommend?song=&artist=` | Recommendations (CDN-cacheable) |
+| `GET /api/search?q=` | Autocomplete (real catalog tracks) |
+| `GET /api/preview?id=` | Redirects to a fresh Deezer preview |
+| `GET /api/popular` | Most-searched songs |
+| `GET /api/config` | Which optional features are on |
+| `GET /api/apple-token` | MusicKit developer token |
+| `GET /api/health` | Configuration diagnostics |
 
 ## Project layout
 
 ```
-api/recommend.js        Vercel serverless entry point
-server/recommend.js     Gemini call, schema, model fallback, iTunes enrichment
-vite.config.js          Serves /api/recommend during dev & preview
-src/App.jsx             Main UI
-src/components/         MatchCard, Artwork (with preview player), TrackLinks, icons
-src/styles.css          Glassmorphism theme
+api/                 Vercel functions (thin wrappers)
+server/handlers.js   Route handlers + caching headers
+server/recommend.js  Candidate gathering, ranking, fallbacks
+server/gemini.js     Gemini ranking (constrained to real candidate ids)
+server/sources/      Deezer, Last.fm, iTunes clients
+server/cache.js      Memory + Upstash Redis cache, popular searches
+src/                 React app (SearchBox autocomplete, results, playlists, sharing)
 ```
-
-## Ideas to make it better
-
-1. **Ground results in real listening data.** LLMs sometimes invent songs. Good data sources:
-   - **Last.fm API** (free key): `track.getSimilar` and `artist.getSimilar` return real similar tracks based on what millions of people listen to. Combine them with Gemini: get candidates from Last.fm, then have Gemini rank them and explain why each one matches.
-   - **ListenBrainz / MusicBrainz** (free, open, no key needed for most reads): similar artists, recordings and canonical IDs.
-   - **Deezer API** (no key): related artists, 30‑second previews and artwork.
-   - **Spotify Web API:** good for search, artwork and deep links, but Spotify **removed** `recommendations`, `related-artists` and `audio-features` for new apps in late 2024. Don't build on those.
-2. **Verify every pick.** The app already checks each song against the iTunes catalog (✓ badge). A next step is to drop or re-ask for any track that isn't found.
-3. **Cache results** (Vercel KV, Upstash Redis or Supabase) so popular songs load instantly and use up less of your free Gemini quota.
-4. **Rate‑limit `/api/recommend`** per IP so a public deployment can't use up your quota.
-5. **Search autocomplete** with the iTunes or Deezer search API, so people pick a real song instead of typing it.
-6. **Spotify login** to save results as a playlist with one click.
-7. **Filters:** era, "only other genres", energy level, or "only hidden gems".
-8. **Shareable result URLs** (`?song=…&artist=…`) and Open Graph images.
